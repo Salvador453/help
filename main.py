@@ -38,7 +38,7 @@ def run_web():
 def check_alarm():
     global current_status
 
-    url = f"https://api.ukrainealarm.com/api/v3/alerts/{CITY_ID}"
+    url = "https://api.ukrainealarm.com/api/v3/alerts"
     headers = {"Authorization": f"Bearer {UKRAINEALARM_TOKEN}"}
 
     while True:
@@ -47,9 +47,18 @@ def check_alarm():
 
             if response.status_code == 200:
                 data = response.json()
-                alarm_active = data.get("activeAlerts", [])
 
-                if alarm_active:
+                city_alarm_active = False
+
+                # Перебираем все тревоги
+                for region in data:
+                    if region.get("regionId") == CITY_ID:
+                        if region.get("activeAlerts"):
+                            city_alarm_active = True
+                        break
+
+                # Логика смены статуса
+                if city_alarm_active:
                     if current_status != "ALARM":
                         current_status = "ALARM"
                         bot.send_message(
@@ -66,6 +75,7 @@ def check_alarm():
 
             else:
                 print("Ошибка API:", response.status_code)
+                print(response.text)
 
         except Exception as e:
             print("Ошибка:", e)
