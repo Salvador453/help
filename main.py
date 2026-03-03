@@ -39,7 +39,7 @@ def check_alarm():
     global current_status
 
     url = f"https://api.ukrainealarm.com/api/v3/alerts/{CITY_ID}"
-    headers = {"Authorization": UKRAINEALARM_TOKEN}
+    headers = {"Authorization": f"Bearer {UKRAINEALARM_TOKEN}"}
 
     while True:
         try:
