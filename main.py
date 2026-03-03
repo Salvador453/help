@@ -100,4 +100,8 @@ def status_command(message):
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=check_alarm).start()
+
+    bot.remove_webhook()
+    time.sleep(1)
+
     bot.infinity_polling()
