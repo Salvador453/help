@@ -25,15 +25,14 @@ ALERT_CHAT_IDS = ["-1003088722284"]
 API_BASE_URL = "https://api.ukrainealarm.com/api/v3"
 API_KEY = "14d49bd6:19c6d5a643e2fddfb2a473e9c4c08ccd"
 
+# ID города Запорожье (Запорізька територіальна громада)
+ZAPORIZHZHIA_CITY_ID = "564"
+ZAPORIZHZHIA_CITY_NAME = "м. Запоріжжя та Запорізька ТГ"
+
 # Заголовки для авторизации
 HEADERS = {
     "Authorization": API_KEY
 }
-
-# ID региона для города Запорожье (получается динамически при старте)
-ZAPORIZHZHIA_CITY_ID = None
-ZAPORIZHZHIA_REGION_NAME = "Запорізька область"
-ZAPORIZHZHIA_CITY_NAME = "Запоріжжя"
 
 # Состояние тревоги
 LAST_ALERT_STATE = {
@@ -48,51 +47,7 @@ dp = Dispatcher()
 
 # ========== API ФУНКЦИИ ==========
 
-async def get_regions():
-    """Получить список всех регионов и найти ID города Запорожье"""
-    global ZAPORIZHZHIA_CITY_ID
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_BASE_URL}/regions",
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    
-                    # Ищем Запорожскую область
-                    for region in data:
-                        if region.get("regionName") == ZAPORIZHZHIA_REGION_NAME:
-                            # Ищем город Запорожье в списке населенных пунктов
-                            for location in region.get("regionChildIds", []):
-                                if location.get("regionName") == ZAPORIZHZHIA_CITY_NAME:
-                                    ZAPORIZHZHIA_CITY_ID = location.get("regionId")
-                                    logger.info(f"✅ Найден ID города Запорожье: {ZAPORIZHZHIA_CITY_ID}")
-                                    return True
-                            
-                            # Если не нашли город отдельно, используем ID области как fallback
-                            # (но лучше найти именно город)
-                            logger.warning("⚠️ Город Запорожье не найден отдельно, ищем более точное совпадение...")
-                    
-                    # Альтернативный поиск по всем регионам
-                    for region in data:
-                        if ZAPORIZHZHIA_CITY_NAME in region.get("regionName", ""):
-                            ZAPORIZHZHIA_CITY_ID = region.get("regionId")
-                            logger.info(f"✅ Найден ID региона (альтернативный поиск): {ZAPORIZHZHIA_CITY_ID}")
-                            return True
-                    
-                    logger.error("❌ Не удалось найти ID для города Запорожье")
-                    return False
-                else:
-                    logger.error(f"❌ Ошибка API при получении регионов: {response.status}")
-                    return False
-    except Exception as e:
-        logger.error(f"❌ Исключение при получении регионов: {e}")
-        return False
-
-async def get_alert_status(region_id):
+async def get_alert_by_region(region_id):
     """Получить статус тревоги для конкретного региона"""
     try:
         async with aiohttp.ClientSession() as session:
@@ -102,45 +57,27 @@ async def get_alert_status(region_id):
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    # API возвращает список активных тревог для региона
+                    if data and len(data) > 0:
+                        # Берем первую активную тревогу
+                        alert = data[0]
+                        return {
+                            "active": True,
+                            "alert_type": alert.get("alertType", "Повітряна тривога"),
+                            "changed_at": alert.get("changed"),
+                            "location": alert.get("locationTitle", ZAPORIZHZHIA_CITY_NAME)
+                        }
+                    else:
+                        return {"active": False, "alert_type": None, "changed_at": None}
                 elif response.status == 404:
-                    logger.warning(f"⚠️ Регион {region_id} не найден в API")
+                    logger.warning(f"⚠️ Регион {region_id} не найден или нет данных")
                     return None
                 else:
                     logger.error(f"❌ Ошибка API: {response.status}")
                     return None
     except Exception as e:
         logger.error(f"❌ Ошибка при запросе статуса: {e}")
-        return None
-
-async def check_alerts():
-    """Проверить все активные тревоги и найти статус для Запорожья"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_BASE_URL}/alerts",
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    
-                    # Ищем тревогу для Запорожья
-                    for alert in data:
-                        if alert.get("regionId") == ZAPORIZHZHIA_CITY_ID:
-                            return {
-                                "active": True,
-                                "alert_type": alert.get("alertType"),
-                                "changed_at": alert.get("changed")
-                            }
-                    
-                    # Если не нашли в активных - значит отбой
-                    return {"active": False, "alert_type": None, "changed_at": None}
-                else:
-                    logger.error(f"❌ Ошибка API при получении алертов: {response.status}")
-                    return None
-    except Exception as e:
-        logger.error(f"❌ Ошибка при проверке алертов: {e}")
         return None
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
@@ -152,7 +89,9 @@ async def start_handler(message: Message):
         "🚀 <b>Бот мониторинга воздушных тревог запущен!</b>\n\n"
         f"📍 <b>Местоположение:</b> {ZAPORIZHZHIA_CITY_NAME}\n"
         f"🆔 <b>ID региона:</b> <code>{ZAPORIZHZHIA_CITY_ID}</code>\n\n"
-        "Я отслеживаю официальные данные с api.ukrainealarm.com\n"
+        "✅ <b>Это именно город Запорожье</b>, а не вся область!\n"
+        "Тревоги в других районах области (Бердянск, Мелитополь и т.д.) "
+        "не будут приходить.\n\n"
         "Используйте /status для проверки текущей ситуации.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗺 Карта тревог", url="https://map.ukrainealarm.com/")],
@@ -168,7 +107,7 @@ async def go_handler(message: Message):
 @dp.message(Command("status"))
 async def status_handler(message: Message):
     """Проверка текущего статуса"""
-    status = await check_alerts()
+    status = await get_alert_by_region(ZAPORIZHZHIA_CITY_ID)
     
     if status is None:
         await message.answer("❌ <b>Ошибка получения данных</b>\nПопробуйте позже.")
@@ -176,31 +115,39 @@ async def status_handler(message: Message):
     
     if status["active"]:
         icon = "🚨"
-        text_status = "<b>ВНИМАНИЕ! ТРЕВОГА!</b>"
+        text_status = "<b>УВАГА! ТРИВОГА!</b>"
         alert_type = status.get("alert_type", "Повітряна тривога")
+        location = status.get("location", ZAPORIZHZHIA_CITY_NAME)
     else:
         icon = "✅"
-        text_status = "<b>ОТБОЙ</b>\nВсе спокойно в городе."
-        alert_type = "Нет угрозы"
+        text_status = "<b>ВІДБІЙ</b>\nВсе спокійно у місті."
+        alert_type = "Немає загрози"
+        location = ZAPORIZHZHIA_CITY_NAME
     
-    changed_time = status.get("changed_at") or "Нет данных"
+    changed_time = status.get("changed_at") or "Немає даних"
     
     await message.answer(
-        f"{icon} <b>Статус в {ZAPORIZHZHIA_CITY_NAME}:</b>\n\n"
+        f"{icon} <b>Статус у {location}:</b>\n\n"
         f"{text_status}\n"
         f"📋 <b>Тип:</b> {alert_type}\n"
-        f"🕒 <b>Обновлено:</b> {changed_time}\n\n"
-        f"<i>Данные: api.ukrainealarm.com</i>"
+        f"🕒 <b>Оновлено:</b> {changed_time}\n\n"
+        f"<i>Джерело: api.ukrainealarm.com</i>"
     )
 
-@dp.message(Command("regions"))
-async def regions_handler(message: Message):
-    """Отладочная команда для просмотра ID региона"""
+@dp.message(Command("info"))
+async def info_handler(message: Message):
+    """Информация о регионе мониторинга"""
     await message.answer(
-        f"📍 <b>Текущие настройки:</b>\n\n"
-        f"Город: {ZAPORIZHZHIA_CITY_NAME}\n"
-        f"ID региона: <code>{ZAPORIZHZHIA_CITY_ID}</code>\n"
-        f"API URL: {API_BASE_URL}"
+        f"ℹ️ <b>Информация о мониторинге:</b>\n\n"
+        f"📍 <b>Регион:</b> {ZAPORIZHZHIA_CITY_NAME}\n"
+        f"🆔 <b>ID:</b> <code>{ZAPORIZHZHIA_CITY_ID}</code>\n\n"
+        f"<b>Что входит в эту территорию:</b>\n"
+        f"• Собственно город Запорожье\n"
+        f"• Ближайшие поселки Запорожской ТГ\n"
+        f"• Не включает: Бердянск, Мелитополь, Энергодар, "
+        f"и другие районы области\n\n"
+        f"<i>Это позволяет получать только релевантные уведомления "
+        f"без лишних срабатываний по области.</i>"
     )
 
 # ========== МИНИ-ВЕБСЕРВЕР ДЛЯ RENDER ==========
@@ -209,17 +156,33 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     status_icon = "🚨" if LAST_ALERT_STATE["active"] else "✅"
+    status_text = "ТРИВОГА" if LAST_ALERT_STATE["active"] else "ВІДБІЙ"
+    
     return f"""
     <html>
-        <head><title>Air Alert Bot - Zaporizhzhia</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h1>{status_icon} Бот мониторинга тревог</h1>
-            <h2>Город: Запорожье</h2>
-            <p>Статус: <b>{'ТРЕВОГА' if LAST_ALERT_STATE['active'] else 'ОТБОЙ'}</b></p>
-            <p>ID региона: {ZAPORIZHZHIA_CITY_ID}</p>
-            <p>Последнее обновление: {datetime.now().strftime('%H:%M:%S')}</p>
-            <hr>
-            <p><i>Источник: api.ukrainealarm.com</i></p>
+        <head>
+            <title>Air Alert Bot - Zaporizhzhia</title>
+            <meta http-equiv="refresh" content="30">
+            <style>
+                body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }}
+                .container {{ background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }}
+                .status {{ font-size: 48px; margin: 20px 0; }}
+                .alert {{ color: #d32f2f; }}
+                .safe {{ color: #388e3c; }}
+                h1 {{ color: #333; }}
+                .info {{ color: #666; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="status {'alert' if LAST_ALERT_STATE['active'] else 'safe'}">{status_icon}</div>
+                <h1>{status_text}</h1>
+                <h2>м. Запоріжжя</h2>
+                <p class="info">Останнє оновлення: {datetime.now().strftime('%H:%M:%S %d.%m.%Y')}</p>
+                <p class="info">ID регіону: {ZAPORIZHZHIA_CITY_ID}</p>
+                <hr>
+                <p><i>Джерело: api.ukrainealarm.com</i></p>
+            </div>
         </body>
     </html>
     """
@@ -234,20 +197,18 @@ async def monitor_alerts():
     """Фоновая задача мониторинга тревог"""
     global LAST_ALERT_STATE
     
-    # Сначала получаем ID региона
-    if not await get_regions():
-        logger.error("❌ Не удалось инициализировать ID региона. Пробуем продолжить...")
-        # Используем известный ID Запорожской области как fallback
-        # (обычно это не рекомендуется, но для работоспособности)
-        ZAPORIZHZHIA_CITY_ID = "14"  # Примерный ID, лучше получить динамически
+    logger.info(f"🔍 Начинаю мониторинг тревог для ID: {ZAPORIZHZHIA_CITY_ID}")
+    logger.info(f"📍 Регион: {ZAPORIZHZHIA_CITY_NAME}")
     
-    logger.info("🔍 Начинаю мониторинг тревог...")
+    # Небольшая задержка при старте
+    await asyncio.sleep(5)
     
     while True:
         try:
-            current_status = await check_alerts()
+            current_status = await get_alert_by_region(ZAPORIZHZHIA_CITY_ID)
             
             if current_status is None:
+                logger.warning("⚠️ Не удалось получить статус, повтор через 30 сек...")
                 await asyncio.sleep(30)
                 continue
             
@@ -259,13 +220,15 @@ async def monitor_alerts():
                 # Началась тревога
                 time_str = datetime.now().strftime("%H:%M %d.%m.%Y")
                 alert_type = current_status.get("alert_type", "Повітряна тривога")
+                location = current_status.get("location", ZAPORIZHZHIA_CITY_NAME)
                 
                 text = (
-                    f"🚨 <b>ПОВІТРЯНА ТРИВОГА В ЗАПОРІЖЖІ!</b>\n\n"
-                    f"📍 <b>Місце:</b> {ZAPORIZHZHIA_CITY_NAME}\n"
+                    f"🚨 <b>ПОВІТРЯНА ТРИВОГА!</b>\n\n"
+                    f"📍 <b>Місце:</b> {location}\n"
                     f"📋 <b>Тип:</b> {alert_type}\n"
                     f"🕒 <b>Початок:</b> {time_str}\n\n"
-                    f"⚠️ <b>Пройдіть в укриття!</b>"
+                    f"⚠️ <b>Пройдіть в укриття!</b>\n\n"
+                    f"<i>Тривога саме для міста Запоріжжя, не для всієї області</i>"
                 )
                 
                 for chat_id in ALERT_CHAT_IDS:
@@ -278,12 +241,14 @@ async def monitor_alerts():
             elif not is_active_now and LAST_ALERT_STATE["active"]:
                 # Отбой тревоги
                 time_str = datetime.now().strftime("%H:%M %d.%m.%Y")
+                location = current_status.get("location", ZAPORIZHZHIA_CITY_NAME)
                 
                 text = (
-                    f"✅ <b>ВІДБІЙ ТРИВОГИ В ЗАПОРІЖЖІ</b>\n\n"
-                    f"📍 <b>Місце:</b> {ZAPORIZHZHIA_CITY_NAME}\n"
+                    f"✅ <b>ВІДБІЙ ТРИВОГИ!</b>\n\n"
+                    f"📍 <b>Місце:</b> {location}\n"
                     f"🕒 <b>Відбій:</b> {time_str}\n\n"
-                    f"🟢 <b>Небезпека минула</b>"
+                    f"🟢 <b>Небезпека минула</b>\n"
+                    f"Можна виходити з укриття."
                 )
                 
                 for chat_id in ALERT_CHAT_IDS:
@@ -293,12 +258,14 @@ async def monitor_alerts():
                     except Exception as e:
                         logger.error(f"❌ Ошибка отправки в {chat_id}: {e}")
             
-            # Обновляем состояние
+            # Обновляем состояние только если получили валидные данные
             LAST_ALERT_STATE = {
                 "active": is_active_now,
                 "changed_at": changed_time or datetime.now().isoformat(),
                 "alert_type": current_status.get("alert_type")
             }
+            
+            logger.debug(f"Статус обновлен: active={is_active_now}")
             
         except Exception as e:
             logger.error(f"❌ Ошибка в цикле мониторинга: {e}")
@@ -319,6 +286,7 @@ async def main():
     
     # Запускаем бота
     logger.info("🤖 Бот запущен и готов к работе")
+    logger.info(f"📍 Мониторинг: {ZAPORIZHZHIA_CITY_NAME} (ID: {ZAPORIZHZHIA_CITY_ID})")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
