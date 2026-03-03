@@ -5,228 +5,156 @@ import os
 import threading
 from datetime import datetime
 from flask import Flask
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# ================= НАСТРОЙКИ =================
 
-# ========== КОНФИГУРАЦИЯ ==========
 BOT_TOKEN = "8667979264:AAH6Qb9w9-CRwizGRWYSrFH697ruQW21zOM"
 ALERT_CHAT_IDS = ["-1003088722284"]
 
-# Официальный API Ukraine Alarm
 API_BASE_URL = "https://api.ukrainealarm.com/api/v3"
 API_KEY = "14d49bd6:19c6d5a643e2fddfb2a473e9c4c08ccd"
 
-# ID города Запорожье (Запорізька територіальна громада)
-ZAPORIZHZHIA_CITY_ID = "564"
-ZAPORIZHZHIA_CITY_NAME = "м. Запоріжжя"
+# ГОРОД ЗАПОРОЖЬЕ (територіальна громада)
+REGION_ID = "564"
+REGION_NAME = "м. Запоріжжя"
 
-# ИСПРАВЛЕНО: БЕЗ префикса Bearer — просто ключ как есть!
 HEADERS = {
-    "Authorization": API_KEY,  # Без Bearer!
+    "Authorization": API_KEY,
     "Accept": "application/json"
 }
 
-# Состояние тревоги
-LAST_ALERT_STATE = {
-    "active": False,
-    "changed_at": None,
-    "alert_type": None
-}
+# ================= ЛОГИ =================
 
-# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ================= СОСТОЯНИЕ =================
+
+LAST_ALERT_STATE = False
+
+# ================= БОТ =================
+
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# ========== API ФУНКЦИИ ==========
+# ================= API =================
 
-async def get_alert_by_region(region_id):
-    """Получить статус тревоги для конкретного региона"""
+async def get_alert_status(region_id):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"{API_BASE_URL}/alerts/{region_id}"
-            logger.info(f"🌐 Запрос: {url}")
-            
+
             async with session.get(
                 url,
                 headers=HEADERS,
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
-                logger.info(f"📊 Статус: {response.status}")
-                
-                if response.status == 200:
-                    data = await response.json()
-                    
-                    if data and len(data) > 0:
-                        alert = data[0]
-                        return {
-                            "active": True,
-                            "alert_type": alert.get("alertType", "Повітряна тривога"),
-                            "changed_at": alert.get("changed"),
-                            "location": alert.get("locationTitle", ZAPORIZHZHIA_CITY_NAME)
-                        }
-                    else:
-                        return {"active": False, "alert_type": None, "changed_at": None}
-                        
-                elif response.status == 401:
-                    text = await response.text()
-                    logger.error(f"❌ 401: {text}")
+
+                if response.status != 200:
+                    logger.error(f"API ERROR: {response.status}")
                     return None
-                else:
-                    text = await response.text()
-                    logger.error(f"❌ Ошибка {response.status}: {text}")
-                    return None
-                    
+
+                data = await response.json()
+
+                if not data:
+                    return False
+
+                alert = data[0]
+
+                # ГЛАВНОЕ — проверка активности
+                return alert.get("isActive", False)
+
     except Exception as e:
-        logger.error(f"❌ Исключение: {e}")
+        logger.error(f"API EXCEPTION: {e}")
         return None
 
-async def test_api_connection():
-    """Тест подключения"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_BASE_URL}/regions",
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                logger.info(f"🧪 Тест: {response.status}")
-                if response.status == 200:
-                    return True
-                else:
-                    text = await response.text()
-                    logger.error(f"❌ Тест: {response.status} - {text}")
-                    return False
-    except Exception as e:
-        logger.error(f"❌ Тест исключение: {e}")
-        return False
-
-# ========== ОБРАБОТЧИКИ КОМАНД ==========
+# ================= КОМАНДЫ =================
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     await message.answer(
-        "🚀 <b>Бот мониторинга воздушных тревог!</b>\n\n"
-        f"📍 <b>Местоположение:</b> {ZAPORIZHZHIA_CITY_NAME}\n"
-        f"🆔 <b>ID:</b> <code>{ZAPORIZHZHIA_CITY_ID}</code>\n\n"
-        "/status - текущая ситуация\n"
-        "/test - проверить API",
+        f"🚀 <b>Бот тревог</b>\n\n"
+        f"📍 Локация: {REGION_NAME}\n"
+        f"🆔 ID: <code>{REGION_ID}</code>\n\n"
+        f"/status — текущий статус",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗺 Карта", url="https://map.ukrainealarm.com/")]
         ])
     )
 
-@dp.message(Command("go"))
-async def go_handler(message: Message):
-    await start_handler(message)
-
-@dp.message(Command("test"))
-async def test_handler(message: Message):
-    await message.answer("🧪 Проверяю API...")
-    
-    success = await test_api_connection()
-    
-    if success:
-        await message.answer("✅ <b>API работает!</b>")
-    else:
-        await message.answer("❌ <b>Ошибка API</b>\nПроверьте ключ.")
-
 @dp.message(Command("status"))
 async def status_handler(message: Message):
-    await message.answer("🔄 Получаю данные...")
-    
-    status = await get_alert_by_region(ZAPORIZHZHIA_CITY_ID)
-    
-    if status is None:
-        await message.answer("❌ <b>Ошибка получения данных</b>\nПопробуйте /test")
-        return
-    
-    if status["active"]:
-        icon = "🚨"
-        text_status = "<b>ТРИВОГА!</b>"
-        alert_type = status.get("alert_type", "Повітряна тривога")
-    else:
-        icon = "✅"
-        text_status = "<b>ВІДБІЙ</b> - все спокійно"
-        alert_type = "Немає загрози"
-    
-    changed_time = status.get("changed_at") or "Немає даних"
-    
-    await message.answer(
-        f"{icon} <b>Статус:</b> {text_status}\n"
-        f"📋 {alert_type}\n"
-        f"🕒 {changed_time}"
-    )
+    await message.answer("🔄 Проверяю...")
 
-# ========== ВЕБСЕРВЕР ==========
+    status = await get_alert_status(REGION_ID)
+
+    if status is None:
+        await message.answer("❌ Ошибка API")
+        return
+
+    if status:
+        await message.answer("🚨 <b>ТРИВОГА</b>")
+    else:
+        await message.answer("✅ <b>ВІДБІЙ</b>")
+
+# ================= МОНИТОРИНГ =================
+
+async def monitor_alerts():
+    global LAST_ALERT_STATE
+
+    await asyncio.sleep(5)
+    logger.info("Мониторинг запущен")
+
+    while True:
+        try:
+            current_state = await get_alert_status(REGION_ID)
+
+            if current_state is None:
+                await asyncio.sleep(20)
+                continue
+
+            # Тревога началась
+            if current_state and not LAST_ALERT_STATE:
+                text = f"🚨 <b>ТРИВОГА!</b>\n🕒 {datetime.now().strftime('%H:%M %d.%m.%Y')}\n📍 {REGION_NAME}"
+                for chat_id in ALERT_CHAT_IDS:
+                    await bot.send_message(chat_id, text)
+
+            # Отбой
+            if not current_state and LAST_ALERT_STATE:
+                text = f"✅ <b>ВІДБІЙ</b>\n🕒 {datetime.now().strftime('%H:%M %d.%m.%Y')}\n📍 {REGION_NAME}"
+                for chat_id in ALERT_CHAT_IDS:
+                    await bot.send_message(chat_id, text)
+
+            LAST_ALERT_STATE = current_state
+
+        except Exception as e:
+            logger.error(f"Monitor error: {e}")
+
+        await asyncio.sleep(20)
+
+# ================= FLASK (для Render) =================
+
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    status_icon = "🚨" if LAST_ALERT_STATE["active"] else "✅"
-    return f"<h1>{status_icon} Бот работает</h1><p>ID: {ZAPORIZHZHIA_CITY_ID}</p>"
+    icon = "🚨" if LAST_ALERT_STATE else "✅"
+    return f"<h1>{icon} Бот работает</h1><p>ID: {REGION_ID}</p>"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# ========== МОНИТОРИНГ ==========
-
-async def monitor_alerts():
-    global LAST_ALERT_STATE
-    
-    logger.info(f"🔍 Мониторинг ID: {ZAPORIZHZHIA_CITY_ID}")
-    await asyncio.sleep(5)
-    
-    while True:
-        try:
-            current = await get_alert_by_region(ZAPORIZHZHIA_CITY_ID)
-            
-            if current is None:
-                await asyncio.sleep(30)
-                continue
-            
-            is_active = current["active"]
-            
-            # Тревога началась
-            if is_active and not LAST_ALERT_STATE["active"]:
-                time_str = datetime.now().strftime("%H:%M %d.%m.%Y")
-                text = f"🚨 <b>ТРИВОГА!</b>\n🕒 {time_str}\n📍 {ZAPORIZHZHIA_CITY_NAME}"
-                for chat_id in ALERT_CHAT_IDS:
-                    await bot.send_message(chat_id, text)
-            
-            # Отбой
-            elif not is_active and LAST_ALERT_STATE["active"]:
-                time_str = datetime.now().strftime("%H:%M %d.%m.%Y")
-                text = f"✅ <b>ВІДБІЙ</b>\n🕒 {time_str}\n📍 {ZAPORIZHZHIA_CITY_NAME}"
-                for chat_id in ALERT_CHAT_IDS:
-                    await bot.send_message(chat_id, text)
-            
-            LAST_ALERT_STATE = {
-                "active": is_active,
-                "changed_at": current.get("changed_at"),
-                "alert_type": current.get("alert_type")
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка: {e}")
-        
-        await asyncio.sleep(20)
-
-# ========== ЗАПУСК ==========
+# ================= ЗАПУСК =================
 
 async def main():
     threading.Thread(target=run_flask, daemon=True).start()
     asyncio.create_task(monitor_alerts())
-    logger.info("🤖 Бот запущен")
+    logger.info("Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
