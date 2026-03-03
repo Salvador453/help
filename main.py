@@ -13,9 +13,9 @@ TELEGRAM_TOKEN = "8667979264:AAH6Qb9w9-CRwizGRWYSrFH697ruQW21zOM"
 UKRAINEALARM_TOKEN = "14d49bd6:19c6d5a643e2fddfb2a473e9c4c08ccd"
 
 CITY_ID = 564  # Запорожье (город)
-GROUP_ID = -1003088722284  # твоя приватная группа
+GROUP_ID = -1003088722284  # твоя группа
 
-CHECK_INTERVAL = 20  # проверка каждые 20 секунд
+CHECK_INTERVAL = 20
 
 # =========================
 
@@ -39,18 +39,15 @@ async def check_alarm():
     global current_status
 
     url = f"https://api.ukrainealarm.com/api/v3/alerts/{CITY_ID}"
-
-    headers = {
-        "Authorization": UKRAINEALARM_TOKEN
-    }
+    headers = {"Authorization": UKRAINEALARM_TOKEN}
 
     while True:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as resp:
+
                     if resp.status == 200:
                         data = await resp.json()
-
                         alarm_active = data.get("activeAlerts", [])
 
                         if alarm_active:
@@ -65,7 +62,7 @@ async def check_alarm():
                                 current_status = "CLEAR"
                                 bot.send_message(
                                     GROUP_ID,
-                                    "✅ Отбой тревоги"
+                                    "✅ Отбой тревоги в Запорожье"
                                 )
                     else:
                         print("Ошибка API:", resp.status)
@@ -74,6 +71,20 @@ async def check_alarm():
             print("Ошибка:", e)
 
         await asyncio.sleep(CHECK_INTERVAL)
+
+
+# =========================
+# 📌 КОМАНДА /status
+# =========================
+
+@bot.message_handler(commands=['status'])
+def status_command(message):
+    if current_status is None:
+        bot.reply_to(message, "🔄 Проверяю статус...")
+    elif current_status == "ALARM":
+        bot.reply_to(message, "🚨 Сейчас тревога в Запорожье")
+    else:
+        bot.reply_to(message, "✅ Сейчас отбоя тревоги в Запорожье")
 
 
 def start_async_loop():
